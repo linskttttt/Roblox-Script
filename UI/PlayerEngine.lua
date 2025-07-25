@@ -12,24 +12,24 @@ PlayerEngine.__index = PlayerEngine
 function PlayerEngine.new(opts)
     opts = opts or {}
     local self = setmetatable({}, PlayerEngine)
-    self.UpdateRate     = opts.updateRate or 0.1
-    self.Debug          = opts.debug or false
-    self.leadTime       = opts.leadTime or 0
-    self.teamCheckFn    = opts.teamCheckFn
-    self.tagWhitelist   = opts.tagWhitelist or {}
-    self.tagBlacklist   = opts.tagBlacklist or {}
-    self.OnUpdate       = Instance.new("BindableEvent")
-    self.OnEnterScreen  = Instance.new("BindableEvent")
-    self.OnExitScreen   = Instance.new("BindableEvent")
-    self.OnVisible      = Instance.new("BindableEvent")
-    self.OnHidden       = Instance.new("BindableEvent")
-    self._players       = {}
-    self._cache         = setmetatable({}, { __mode = "k" })
-    self._running       = false
-    self._acc           = 0
-    self._scratchAll    = {}
+    self.UpdateRate       = opts.updateRate or 0.1
+    self.Debug            = opts.debug or false
+    self.leadTime         = opts.leadTime or 0
+    self.teamCheckFn      = opts.teamCheckFn
+    self.tagWhitelist     = opts.tagWhitelist or {}
+    self.tagBlacklist     = opts.tagBlacklist or {}
+    self.OnUpdate         = Instance.new("BindableEvent")
+    self.OnEnterScreen    = Instance.new("BindableEvent")
+    self.OnExitScreen     = Instance.new("BindableEvent")
+    self.OnVisible        = Instance.new("BindableEvent")
+    self.OnHidden         = Instance.new("BindableEvent")
+    self._players         = {}
+    self._cache           = setmetatable({}, { __mode = "k" })
+    self._running         = false
+    self._acc             = 0
+    self._scratchAll      = {}
     self._scratchFiltered = {}
-    self._visParams     = RaycastParams.new()
+    self._visParams       = RaycastParams.new()
     self._visParams.FilterType = Enum.RaycastFilterType.Blacklist
     self._visParams.IgnoreWater = true
     self._visParams.FilterDescendantsInstances = {}
@@ -39,13 +39,11 @@ function PlayerEngine.new(opts)
     for _, plr in ipairs(Players:GetPlayers()) do
         self:_track(plr)
     end
-
     return self
 end
 
 function PlayerEngine:_track(plr)
     table.insert(self._players, plr)
-
     local function onChar(char)
         local root = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
         if not root then return end
@@ -61,7 +59,6 @@ function PlayerEngine:_track(plr)
             ally      = (self.teamCheckFn and self.teamCheckFn(plr)) or (plr.Team == LocalPlayer.Team),
         }
     end
-
     plr.CharacterAdded:Connect(onChar)
     plr.CharacterRemoving:Connect(function() self._cache[plr] = nil end)
     if plr.Character then
@@ -120,8 +117,8 @@ function PlayerEngine:_update(dt)
             d.pos        = newPos
             d.predictedPos = newPos + d.vel * self.leadTime
 
-            local sx, sy, ons = Camera:WorldToViewportPoint(d.predictedPos)
-            d.screenPos = Vector2.new(sx, sy)
+            local screenPoint, ons = Camera:WorldToViewportPoint(d.predictedPos)
+            d.screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
             d.onScreen  = ons
 
             local cframe, size = root.Parent:GetBoundingBox()
@@ -129,8 +126,11 @@ function PlayerEngine:_update(dt)
             d.inFrustum = false
             for xi = -1, 1, 2 do for yi = -1, 1, 2 do for zi = -1, 1, 2 do
                 local corner = cframe.Position + Vector3.new(half.X*xi, half.Y*yi, half.Z*zi)
-                local _,_,onc = Camera:WorldToViewportPoint(corner)
-                if onc then d.inFrustum = true; break end
+                local _, onc = Camera:WorldToViewportPoint(corner)
+                if onc then
+                    d.inFrustum = true
+                    break
+                end
             end end end
 
             count = count + 1
@@ -152,20 +152,17 @@ function PlayerEngine:_update(dt)
     end
 
     self.OnUpdate:Fire()
-
     for plr, d in pairs(self._cache) do
         if d.onScreen and not d._prevOnScreen then
             self.OnEnterScreen:Fire(plr, d)
         elseif not d.onScreen and d._prevOnScreen then
             self.OnExitScreen:Fire(plr, d)
         end
-
         if d.visible and not d._prevVisible then
             self.OnVisible:Fire(plr, d)
         elseif not d.visible and d._prevVisible then
             self.OnHidden:Fire(plr, d)
         end
-
         d._prevOnScreen = d.onScreen
         d._prevVisible  = d.visible
     end
@@ -193,11 +190,11 @@ function PlayerEngine:GetFiltered(opts)
         self._scratchFiltered[i] = nil
     end
 
-    local camCF  = Camera.CFrame
-    local camPos = camCF.Position
-    local forward= camCF.LookVector
-    local maxD2  = (opts.maxDist or math.huge)^2
-    local fovC   = opts.fovCos or -1
+    local camCF   = Camera.CFrame
+    local camPos  = camCF.Position
+    local forward = camCF.LookVector
+    local maxD2   = (opts.maxDist or math.huge)^2
+    local fovC    = opts.fovCos or -1
 
     for plr, d in pairs(self._cache) do
         if plr ~= LocalPlayer then
