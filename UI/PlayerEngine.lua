@@ -12,9 +12,9 @@ PlayerEngine.__index = PlayerEngine
 function PlayerEngine.new(opts)
     opts = opts or {}
     local self = setmetatable({}, PlayerEngine)
-    self.UpdateRate       = opts.updateRate or 0.1
-    self.Debug            = opts.debug or false
-    self.leadTime         = opts.leadTime or 0
+    self.UpdateRate       = opts.updateRate   or 0.1
+    self.Debug            = opts.debug        or false
+    self.leadTime         = opts.leadTime     or 0
     self.teamCheckFn      = opts.teamCheckFn
     self.tagWhitelist     = opts.tagWhitelist or {}
     self.tagBlacklist     = opts.tagBlacklist or {}
@@ -30,15 +30,16 @@ function PlayerEngine.new(opts)
     self._scratchAll      = {}
     self._scratchFiltered = {}
     self._visParams       = RaycastParams.new()
-    self._visParams.FilterType = Enum.RaycastFilterType.Blacklist
-    self._visParams.IgnoreWater = true
+    self._visParams.FilterType            = Enum.RaycastFilterType.Blacklist
+    self._visParams.IgnoreWater           = true
     self._visParams.FilterDescendantsInstances = {}
 
-    Players.PlayerAdded:Connect(function(plr) self:_track(plr) end)
+    Players.PlayerAdded:Connect(function(plr) self:_track(plr)   end)
     Players.PlayerRemoving:Connect(function(plr) self:_untrack(plr) end)
     for _, plr in ipairs(Players:GetPlayers()) do
         self:_track(plr)
     end
+
     return self
 end
 
@@ -48,17 +49,19 @@ function PlayerEngine:_track(plr)
         local root = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
         if not root then return end
         self._cache[plr] = {
-            root      = root,
-            lastPos   = root.Position,
-            pos       = root.Position,
-            vel       = Vector3.new(),
-            screenPos = Vector2.new(),
-            onScreen  = false,
-            visible   = false,
-            inFrustum = false,
-            ally      = (self.teamCheckFn and self.teamCheckFn(plr)) or (plr.Team == LocalPlayer.Team),
+            root       = root,
+            lastPos    = root.Position,
+            pos        = root.Position,
+            vel        = Vector3.new(),
+            screenPos  = Vector2.new(),
+            onScreen   = false,
+            visible    = false,
+            inFrustum  = false,
+            ally       = (self.teamCheckFn and self.teamCheckFn(plr))
+                         or (plr.Team == LocalPlayer.Team),
         }
     end
+
     plr.CharacterAdded:Connect(onChar)
     plr.CharacterRemoving:Connect(function() self._cache[plr] = nil end)
     if plr.Character then
@@ -99,9 +102,9 @@ function PlayerEngine:_update(dt)
     local tickDt = self._acc
     self._acc = 0
 
-    local camCF    = Camera.CFrame
-    local camPos   = camCF.Position
-    local forward  = camCF.LookVector
+    local camCF   = Camera.CFrame
+    local camPos  = camCF.Position
+    local forward = camCF.LookVector
     self._visParams.FilterDescendantsInstances[1] = LocalPlayer.Character or {}
 
     local origins, directions, idxMap = {}, {}, {}
@@ -117,23 +120,27 @@ function PlayerEngine:_update(dt)
             d.pos        = newPos
             d.predictedPos = newPos + d.vel * self.leadTime
 
-            local screenPoint, ons = Camera:WorldToViewportPoint(d.predictedPos)
-            d.screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
-            d.onScreen  = ons
+            local sx, sy, onS = Camera:WorldToViewportPoint(d.predictedPos)
+            d.screenPos = Vector2.new(sx, sy)
+            d.onScreen  = onS
 
             local cframe, size = root.Parent:GetBoundingBox()
             local half = size * 0.5
             d.inFrustum = false
-            for xi = -1, 1, 2 do for yi = -1, 1, 2 do for zi = -1, 1, 2 do
-                local corner = cframe.Position + Vector3.new(half.X*xi, half.Y*yi, half.Z*zi)
-                local _, onc = Camera:WorldToViewportPoint(corner)
-                if onc then
-                    d.inFrustum = true
-                    break
+            for xi = -1, 1, 2 do
+                for yi = -1, 1, 2 do
+                    for zi = -1, 1, 2 do
+                        local corner = cframe.Position + Vector3.new(half.X*xi, half.Y*yi, half.Z*zi)
+                        local _, vis = Camera:WorldToViewportPoint(corner)
+                        if vis then
+                            d.inFrustum = true
+                            break
+                        end
+                    end
                 end
-            end end end
+            end
 
-            count = count + 1
+            count += 1
             origins[count]    = camPos
             directions[count] = d.predictedPos - camPos
             idxMap[count]     = { plr = plr, d = d }
@@ -147,7 +154,8 @@ function PlayerEngine:_update(dt)
             local entry = idxMap[i]
             local hit   = Workspace:Raycast(origins[i], directions[i], self._visParams)
             entry.d.visible = (hit == nil)
-            entry.d.ally    = (self.teamCheckFn and self.teamCheckFn(entry.plr)) or (entry.plr.Team == LocalPlayer.Team)
+            entry.d.ally    = (self.teamCheckFn and self.teamCheckFn(entry.plr))
+                              or (entry.plr.Team == LocalPlayer.Team)
         end
     end
 
@@ -200,7 +208,8 @@ function PlayerEngine:GetFiltered(opts)
         if plr ~= LocalPlayer then
             local v = d.pos - camPos
             if v:Dot(v) <= maxD2 and forward:Dot(v.Unit) >= fovC then
-                if (not opts.teamCheck) or ((self.teamCheckFn and self.teamCheckFn(plr)) or d.ally) then
+                if (not opts.teamCheck) or ((self.teamCheckFn and self.teamCheckFn(plr))
+                    or d.ally) then
                     if (not opts.wallCheck) or d.visible then
                         if (not opts.onScreen) or d.onScreen then
                             if (not opts.frustumCulling) or d.inFrustum then
@@ -223,7 +232,7 @@ function PlayerEngine:GetFiltered(opts)
                                 if pass then
                                     self._scratchFiltered[#self._scratchFiltered+1] = {
                                         player = plr,
-                                        data   = d
+                                        data   = d,
                                     }
                                 end
                             end
