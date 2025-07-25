@@ -124,11 +124,12 @@ function PlayerEngine:_update(dt)
         end
     end
     if count > 0 then
-        local results = Workspace:BatchRaycast(origins, directions, self._visParams)
         for i = 1, count do
             local entry = idxMap[i]
-            entry.d.visible = not results[i]
-            entry.d.ally = (self.teamCheckFn and self.teamCheckFn(entry.plr)) or (entry.plr.Team == LocalPlayer.Team)
+            local hit    = Workspace:Raycast(origins[i], directions[i], self._visParams)
+            entry.d.visible = (hit == nil)
+            entry.d.ally    = (self.teamCheckFn and self.teamCheckFn(entry.plr))
+                              or (entry.plr.Team == LocalPlayer.Team)
         end
     end
     self.OnUpdate:Fire()
