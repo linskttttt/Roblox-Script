@@ -461,8 +461,8 @@ Library v0.36 [
 ]
 ]]
 local library = {
-	Version = "0.36",
-	WorkspaceName = "allservice Lib",
+	Version = "0.0.10",
+	WorkspaceName = "Allservice Lib",
 	flags = {},
 	signals = {},
 	objects = {},
@@ -7473,7 +7473,7 @@ function library:CreateWindow(options, ...)
 		end
 		if options.Credit ~= false then
 			daaata[1 + #daaata] = {"AddLabel", "__Designer.Label.Creator", detailssection, {
-				Text = "Library by allservice#5229 "
+				Text = "brought to you by: All Services Roblox Development Team "
 			}}
 		elseif "Gee, thanks for your support." then
 		end
