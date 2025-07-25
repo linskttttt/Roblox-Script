@@ -1,123 +1,82 @@
 -- PlayerEngine.lua
-local Players     = game:GetService("Players")
-local RunService  = game:GetService("RunService")
-local Workspace   = game:GetService("Workspace")
-local Camera      = Workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace  = game:GetService("Workspace")
+local Camera     = Workspace.CurrentCamera
+local LocalPlayer= Players.LocalPlayer
 
 local PlayerEngine = {}
-PlayerEngine._players   = {}       -- list of tracked players
+PlayerEngine._players   = {}       -- tracked players list
 PlayerEngine._cache     = {}       -- [player] = data
 PlayerEngine.OnUpdate   = Instance.new("BindableEvent")
-PlayerEngine.UpdateRate = 0.1      -- seconds
+PlayerEngine.UpdateRate = 0.1      -- seconds between ticks
 
--- pre-allocate some scratch tables to reuse
-local scratchFiltered = {}
+-- scratch tables to avoid GC
 local scratchAll      = {}
+local scratchFiltered = {}
 
--- pre-build a RaycastParams for visibility checks
+-- prebuilt RaycastParams
 local visParams = RaycastParams.new()
-visParams.FilterDescendantsInstances = { LocalPlayer.Character or {} }
 visParams.FilterType = Enum.RaycastFilterType.Blacklist
 visParams.IgnoreWater = true
 
--- ---- INTERNAL SETUP: track players & characters ----
-
--- when a new player joins, insert into our list
-local function onPlayerAdded(plr)
-    table.insert(PlayerEngine._players, plr)
-    -- if their character already exists, hook it
-    if plr.Character then
-        PlayerEngine:_trackCharacter(plr, plr.Character)
-    end
+-- track new players/characters
+local function track(plr)
+    PlayerEngine._players[#PlayerEngine._players+1] = plr
     plr.CharacterAdded:Connect(function(char)
-        PlayerEngine:_trackCharacter(plr, char)
+        local root = char:WaitForChild("HumanoidRootPart",1) or char.PrimaryPart
+        PlayerEngine._cache[plr] = {
+            root      = root,
+            lastPos   = root.Position,
+            pos       = root.Position,
+            vel       = Vector3.new(),
+            screenPos = Vector2.new(),
+            onScreen  = false,
+            visible   = false,
+            ally      = (plr.Team == LocalPlayer.Team)
+        }
     end)
-    plr.CharacterRemoving:Connect(function(char)
-        PlayerEngine:_untrackCharacter(plr)
-    end)
+    plr.CharacterRemoving:Connect(function() PlayerEngine._cache[plr] = nil end)
 end
 
-function PlayerEngine:_trackCharacter(plr, char)
-    -- create or reset cache entry
-    local data = PlayerEngine._cache[plr]
-    if not data then
-        data = {}
-        PlayerEngine._cache[plr] = data
-    end
-    data.root        = char:WaitForChild("HumanoidRootPart", 1) or char.PrimaryPart
-    data.lastPos     = data.root.Position
-    data.pos         = data.lastPos
-    data.vel         = Vector3.new()
-    data.screenPos   = Vector2.new()
-    data.onScreen    = false
-    data.visible     = false
-    data.ally        = (plr.Team == LocalPlayer.Team)
-end
-
-function PlayerEngine:_untrackCharacter(plr)
-    PlayerEngine._cache[plr] = nil
-end
-
-Players.PlayerAdded:Connect(onPlayerAdded)
+Players.PlayerAdded:Connect(track)
 Players.PlayerRemoving:Connect(function(plr)
-    -- remove from list
-    for i, v in ipairs(PlayerEngine._players) do
-        if v == plr then
-            table.remove(PlayerEngine._players, i)
-            break
-        end
+    for i,p in ipairs(PlayerEngine._players) do
+        if p == plr then table.remove(PlayerEngine._players,i); break end
     end
     PlayerEngine._cache[plr] = nil
 end)
+for _,plr in ipairs(Players:GetPlayers()) do track(plr) end
 
--- initialize existing players
-for _, plr in ipairs(Players:GetPlayers()) do
-    onPlayerAdded(plr)
-end
-
--- ---- CORE UPDATER ----
-
+-- main update loop
 do
-    local accumulator = 0
-    local camC0, camPos, forward
+    local acc, camPos, forward = 0
     RunService.Heartbeat:Connect(function(dt)
-        accumulator = accumulator + dt
-        if accumulator < PlayerEngine.UpdateRate then return end
-        local tickDt = accumulator
-        accumulator = 0
+        acc += dt
+        if acc < PlayerEngine.UpdateRate then return end
+        local tickDt = acc
+        acc = 0
 
-        camC0    = Camera.CFrame
-        camPos   = camC0.Position
-        forward  = camC0.LookVector
+        camPos  = Camera.CFrame.Position
+        forward = Camera.CFrame.LookVector
+        visParams.FilterDescendantsInstances = { LocalPlayer.Character or {} }
 
-        -- update visibility filter list
-        visParams.FilterDescendantsInstances[1] = LocalPlayer.Character or {}
-
-        -- update each tracked player's data
-        for _, plr in ipairs(PlayerEngine._players) do
-            local data = PlayerEngine._cache[plr]
-            local root = data and data.root
+        for _,plr in ipairs(PlayerEngine._players) do
+            local d = PlayerEngine._cache[plr]
+            local root = d and d.root
             if root and root.Parent then
                 local newPos = root.Position
-                data.vel     = (newPos - data.lastPos) / tickDt
-                data.lastPos = newPos
-                data.pos     = newPos
+                d.vel       = (newPos - d.lastPos)/tickDt
+                d.lastPos   = newPos
+                d.pos       = newPos
 
-                -- screen projection (only if needed downstream)
-                local sx, sy, onscr = Camera:WorldToViewportPoint(newPos)
-                data.screenPos = Vector2.new(sx, sy)
-                data.onScreen  = onscr
+                local sx,sy,ons = Camera:WorldToViewportPoint(newPos)
+                d.screenPos = Vector2.new(sx,sy)
+                d.onScreen  = ons
 
-                -- visibility raycast
-                local rayResult = Workspace:Raycast(
-                    camPos,
-                    (newPos - camPos),
-                    visParams
-                )
-                data.visible = (rayResult == nil)
-
-                data.ally = (plr.Team == LocalPlayer.Team)
+                local ray = Workspace:Raycast(camPos, newPos-camPos, visParams)
+                d.visible   = not ray
+                d.ally      = (plr.Team == LocalPlayer.Team)
             else
                 PlayerEngine._cache[plr] = nil
             end
@@ -127,35 +86,33 @@ do
     end)
 end
 
--- ---- PUBLIC API ----
-
--- get raw list (reused table!)
+-- API
 function PlayerEngine:GetAll()
     scratchAll = {}
-    for plr, data in pairs(self._cache) do
-        scratchAll[#scratchAll+1] = { player = plr, data = data }
+    for plr,d in pairs(self._cache) do
+        scratchAll[#scratchAll+1] = {player=plr,data=d}
     end
     return scratchAll
 end
 
--- filter once into scratchFiltered, then return it
--- opts = { maxDist, fovCos, teamCheck, wallCheck, onScreen }
 function PlayerEngine:GetFiltered(opts)
     scratchFiltered = {}
     local maxD2 = (opts.maxDist or 1e9)^2
     local fovC  = opts.fovCos or -1
+    local camPos = Camera.CFrame.Position
+    local forward= Camera.CFrame.LookVector
 
-    for plr, data in pairs(self._cache) do
-        if plr ~= LocalPlayer then
-            local toCam = data.pos - Camera.CFrame.Position
-            local dist2 = toCam.Magnitude * toCam.Magnitude
-            if dist2 <= maxD2
-            and (forward:Dot(toCam.Unit) >= fovC)
-            and (not opts.teamCheck   or not data.ally)
-            and (not opts.wallCheck   or data.visible)
-            and (not opts.onScreen    or data.onScreen)
+    for plr,d in pairs(self._cache) do
+        if plr~=LocalPlayer then
+            local v = d.pos - camPos
+            local dist2 = v.Magnitude*v.Magnitude
+            if dist2<=maxD2
+            and forward:Dot(v.Unit)>=fovC
+            and (not opts.teamCheck or not d.ally)
+            and (not opts.wallCheck or d.visible)
+            and (not opts.onScreen  or d.onScreen)
             then
-                scratchFiltered[#scratchFiltered+1] = { player=plr, data=data }
+                scratchFiltered[#scratchFiltered+1] = {player=plr,data=d}
             end
         end
     end
@@ -163,15 +120,13 @@ function PlayerEngine:GetFiltered(opts)
     return scratchFiltered
 end
 
--- pick the “best” by passing in a sorting function
--- chooseFn(list) sorts or rearranges the list in place
 function PlayerEngine:GetClosest(opts, chooseFn)
     local list = self:GetFiltered(opts)
-    if #list == 0 then
-        return nil
-    end
+    if #list==0 then return end
     chooseFn(list)
     return list[1]
 end
+
+function PlayerEngine:Start() end  -- no-op; engine starts on require
 
 return PlayerEngine
