@@ -120,9 +120,9 @@ function PlayerEngine:_update(dt)
             d.pos        = newPos
             d.predictedPos = newPos + d.vel * self.leadTime
 
-            local sx, sy, onS = Camera:WorldToViewportPoint(d.predictedPos)
+            local sx, sy, sz, onScreen = Camera:WorldToViewportPoint(d.predictedPos)
             d.screenPos = Vector2.new(sx, sy)
-            d.onScreen  = onS
+            d.onScreen  = onScreen
 
             local cframe, size = root.Parent:GetBoundingBox()
             local half = size * 0.5
