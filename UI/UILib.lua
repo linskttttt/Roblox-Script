@@ -7473,7 +7473,7 @@ function library:CreateWindow(options, ...)
 		end
 		if options.Credit ~= false then
 			daaata[1 + #daaata] = {"AddLabel", "__Designer.Label.Creator", detailssection, {
-				Text = "brought to you by: All Services Roblox Development Team "
+				Text = "All Services Dev Team "
 			}}
 		elseif "Gee, thanks for your support." then
 		end
