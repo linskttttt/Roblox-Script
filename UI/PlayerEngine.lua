@@ -1,4 +1,4 @@
--- PlayerEngine.lua
+-- PlayerEngine.lua (Fixed Version)
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
 local Workspace         = game:GetService("Workspace")
@@ -48,30 +48,65 @@ function PlayerEngine.new(opts)
 end
 
 function PlayerEngine:_track(plr)
+    if plr == LocalPlayer then return end -- Don't track local player
+    
     table.insert(self._players, plr)
+    
     local function onChar(char)
-        local root = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
-        if not root then return end
+        if not char then return end
+        
+        -- Wait for character to fully load
+        local root = char:WaitForChild("HumanoidRootPart", 10)
+        if not root then 
+            warn("PlayerEngine: No HumanoidRootPart found for", plr.Name)
+            return 
+        end
+        
+        -- Initialize player data
         self._cache[plr] = {
             root      = root,
             lastPos   = root.Position,
             pos       = root.Position,
-            vel       = Vector3.new(),
-            screenPos = Vector2.new(),
+            vel       = Vector3.new(0, 0, 0),
+            screenPos = Vector2.new(0, 0),
             onScreen  = false,
-            visible   = false,
+            visible   = true,
             inFrustum = false,
-            ally      = (self.teamCheckFn and self.teamCheckFn(plr)) or (plr.Team == LocalPlayer.Team),
+            ally      = false,
+            _prevOnScreen = false,
+            _prevVisible = true,
         }
+        
+        -- Update ally status
+        self:_updateAllyStatus(plr)
     end
+    
+    -- Connect character events
     plr.CharacterAdded:Connect(onChar)
-    plr.CharacterRemoving:Connect(function() self._cache[plr] = nil end)
-    if plr.Character then onChar(plr.Character) end
+    plr.CharacterRemoving:Connect(function() 
+        self._cache[plr] = nil 
+    end)
+    
+    -- Handle existing character
+    if plr.Character then 
+        onChar(plr.Character) 
+    end
+end
+
+function PlayerEngine:_updateAllyStatus(plr)
+    local data = self._cache[plr]
+    if not data then return end
+    
+    if self.teamCheckFn then
+        data.ally = self.teamCheckFn(plr)
+    else
+        data.ally = (plr.Team == LocalPlayer.Team)
+    end
 end
 
 function PlayerEngine:_untrack(plr)
-    for i,p in ipairs(self._players) do
-        if p == plr then
+    for i = #self._players, 1, -1 do
+        if self._players[i] == plr then
             table.remove(self._players, i)
             break
         end
@@ -83,8 +118,12 @@ function PlayerEngine:Start()
     if self._running then return end
     self._running = true
     self._connection = RunService.Heartbeat:Connect(function(dt)
-        local ok,err = pcall(function() self:_update(dt) end)
-        if not ok then warn("PlayerEngine error:", err) end
+        local success, err = pcall(function() 
+            self:_update(dt) 
+        end)
+        if not success then 
+            warn("PlayerEngine error:", err) 
+        end
     end)
 end
 
@@ -99,127 +138,224 @@ end
 function PlayerEngine:_update(dt)
     self._acc = self._acc + dt
     if self._acc < self.UpdateRate then return end
+    
     local tickDt = self._acc
     self._acc = 0
+
+    -- Validate camera
+    if not Camera or not Camera.CFrame then
+        return
+    end
 
     local camCF   = Camera.CFrame
     local camPos  = camCF.Position
     local forward = camCF.LookVector
-    self._visParams.FilterDescendantsInstances[1] = LocalPlayer.Character or {}
+    
+    -- Update filter for visibility checks
+    self._visParams.FilterDescendantsInstances = {LocalPlayer.Character or workspace}
 
-    -- prepare for raycasts
-    local origins, directions, idxMap = {}, {}, {}
-    local count = 0
+    -- Update each tracked player
+    for _, plr in ipairs(self._players) do
+        local data = self._cache[plr]
+        if data and data.root and data.root.Parent then
+            -- Update position and velocity
+            local newPos = data.root.Position
+            if tickDt > 0 then
+                data.vel = (newPos - data.lastPos) / tickDt
+            end
+            data.lastPos = newPos
+            data.pos = newPos
+            
+            -- Calculate predicted position
+            data.predictedPos = newPos + (data.vel * self.leadTime)
+            
+            -- Convert to screen space
+            local screenPos, onScreen = Camera:WorldToViewportPoint(data.predictedPos)
+            if screenPos then
+                data.screenPos = Vector2.new(screenPos.X, screenPos.Y)
+                data.onScreen = onScreen and screenPos.Z > 0
+            else
+                data.screenPos = Vector2.new(0, 0)
+                data.onScreen = false
+            end
 
-    -- update each player
-    for _,plr in ipairs(self._players) do
-        local d = self._cache[plr]
-        if d and d.root and d.root.Parent then
-            local newPos = d.root.Position
-            d.vel        = (newPos - d.lastPos)/tickDt
-            d.lastPos    = newPos
-            d.pos        = newPos
-            d.predictedPos = newPos + d.vel * self.leadTime
+            -- Update frustum culling
+            data.inFrustum = data.onScreen
+            if data.root.Parent then
+                local success, cframe, size = pcall(function()
+                    return data.root.Parent:GetBoundingBox()
+                end)
+                
+                if success and cframe and size then
+                    local halfSize = size * 0.5
+                    data.inFrustum = false
+                    
+                    -- Check bounding box corners
+                    for x = -1, 1, 2 do
+                        for y = -1, 1, 2 do
+                            for z = -1, 1, 2 do
+                                local corner = cframe.Position + Vector3.new(
+                                    halfSize.X * x,
+                                    halfSize.Y * y, 
+                                    halfSize.Z * z
+                                )
+                                local _, visible = Camera:WorldToViewportPoint(corner)
+                                if visible then
+                                    data.inFrustum = true
+                                    break
+                                end
+                            end
+                            if data.inFrustum then break end
+                        end
+                        if data.inFrustum then break end
+                    end
+                end
+            end
 
-            -- *** CORRECTLY UNPACK 4 RETURNS HERE ***
-            local sx, sy, sz, onScreen = Camera:WorldToViewportPoint(d.predictedPos)
-            d.screenPos = Vector2.new(sx, sy)
-            d.onScreen  = onScreen
-
-            -- frustum culling (optional)
-            local cframe, size = d.root.Parent:GetBoundingBox()
-            local half = size*0.5
-            d.inFrustum = false
-            for xi=-1,1,2 do for yi=-1,1,2 do for zi=-1,1,2 do
-                local corner = cframe.Position + Vector3.new(half.X*xi, half.Y*yi, half.Z*zi)
-                local _, vis = Camera:WorldToViewportPoint(corner)
-                if vis then d.inFrustum = true; break end
-            end end end
-
-            -- queue for visibility test
-            count += 1
-            origins[count]    = camPos
-            directions[count] = d.predictedPos - camPos
-            idxMap[count]     = {plr=plr, data=d}
+            -- Line of sight check
+            local direction = data.predictedPos - camPos
+            local hit = Workspace:Raycast(camPos, direction, self._visParams)
+            data.visible = (hit == nil)
+            
+            -- Update ally status
+            self:_updateAllyStatus(plr)
+            
         else
+            -- Clean up invalid data
             self._cache[plr] = nil
         end
     end
 
-    -- line‐of‐sight
-    if count>0 then
-        for i=1,count do
-            local e = idxMap[i]
-            local hit = Workspace:Raycast(origins[i], directions[i], self._visParams)
-            e.data.visible = (hit==nil)
-            e.data.ally    = (self.teamCheckFn and self.teamCheckFn(e.plr)) or (e.plr.Team==LocalPlayer.Team)
-        end
-    end
-
-    -- fire update
+    -- Fire update event
     self.OnUpdate:Fire()
 
-    -- fire fine‐grained events
-    for plr,d in pairs(self._cache) do
-        if      d.onScreen  and not d._prevOnScreen then self.OnEnterScreen:Fire(plr,d)
-        elseif not d.onScreen and     d._prevOnScreen then self.OnExitScreen:Fire(plr,d) end
+    -- Fire fine-grained events
+    for plr, data in pairs(self._cache) do
+        if data._prevOnScreen ~= nil then
+            if data.onScreen and not data._prevOnScreen then 
+                self.OnEnterScreen:Fire(plr, data)
+            elseif not data.onScreen and data._prevOnScreen then 
+                self.OnExitScreen:Fire(plr, data) 
+            end
+        end
 
-        if      d.visible    and not d._prevVisible   then self.OnVisible:Fire(plr,d)
-        elseif not d.visible    and     d._prevVisible   then self.OnHidden:Fire(plr,d) end
+        if data._prevVisible ~= nil then
+            if data.visible and not data._prevVisible then 
+                self.OnVisible:Fire(plr, data)
+            elseif not data.visible and data._prevVisible then 
+                self.OnHidden:Fire(plr, data) 
+            end
+        end
 
-        d._prevOnScreen = d.onScreen
-        d._prevVisible  = d.visible
+        data._prevOnScreen = data.onScreen
+        data._prevVisible = data.visible
     end
 
+    -- Debug output
     if self.Debug then
-        for plr,d in pairs(self._cache) do
-            print(plr.Name, d.pos, d.vel, d.visible, d.onScreen)
+        for plr, data in pairs(self._cache) do
+            print(string.format("%s: pos=%s, vel=%s, visible=%s, onScreen=%s, screenPos=%s", 
+                plr.Name, 
+                tostring(data.pos), 
+                tostring(data.vel), 
+                tostring(data.visible), 
+                tostring(data.onScreen),
+                tostring(data.screenPos)
+            ))
         end
     end
 end
 
 function PlayerEngine:GetAll()
-    for i=#self._scratchAll,1,-1 do self._scratchAll[i]=nil end
-    for plr,d in pairs(self._cache) do
-        self._scratchAll[#self._scratchAll+1] = {player=plr,data=d}
+    -- Clear scratch table
+    for i = #self._scratchAll, 1, -1 do 
+        self._scratchAll[i] = nil 
     end
+    
+    -- Fill with current data
+    for plr, data in pairs(self._cache) do
+        table.insert(self._scratchAll, {player = plr, data = data})
+    end
+    
     return self._scratchAll
 end
 
 function PlayerEngine:GetFiltered(opts)
     opts = opts or {}
-    for i=#self._scratchFiltered,1,-1 do self._scratchFiltered[i]=nil end
+    
+    -- Clear scratch table
+    for i = #self._scratchFiltered, 1, -1 do 
+        self._scratchFiltered[i] = nil 
+    end
 
-    local camCF   = Camera.CFrame
-    local camPos  = camCF.Position
-    local forward = camCF.LookVector
-    local maxD2   = (opts.maxDist or math.huge)^2
-    local fovC    = opts.fovCos or -1
+    -- Validate camera
+    if not Camera or not Camera.CFrame then
+        return self._scratchFiltered
+    end
 
-    for plr,d in pairs(self._cache) do
-        if plr~=LocalPlayer then
-            local v = d.pos - camPos
-            if v:Dot(v)<=maxD2 and forward:Dot(v.Unit)>=fovC then
-                if (not opts.teamCheck) or ((self.teamCheckFn and self.teamCheckFn(plr)) or d.ally) then
-                    if (not opts.wallCheck) or d.visible then
-                        if (not opts.onScreen) or d.onScreen then
-                            if (not opts.frustumCulling) or d.inFrustum then
-                                local pass = true
-                                if #self.tagWhitelist>0 then
-                                    pass = false
-                                    for _,tag in ipairs(self.tagWhitelist) do
-                                        if CollectionService:HasTag(d.root.Parent,tag) then
-                                            pass = true; break
+    local camPos = Camera.CFrame.Position
+    local forward = Camera.CFrame.LookVector
+    local maxDist = opts.maxDist or math.huge
+    local maxDistSq = maxDist * maxDist
+    local fovCos = opts.fovCos or -1
+
+    for plr, data in pairs(self._cache) do
+        if plr ~= LocalPlayer and data and data.root and data.root.Parent then
+            -- Distance check
+            local toPlayer = data.pos - camPos
+            local distanceSq = toPlayer:Dot(toPlayer)
+            
+            if distanceSq <= maxDistSq then
+                -- FOV check
+                if distanceSq > 0 then
+                    local dot = forward:Dot(toPlayer.Unit)
+                    if dot >= fovCos then
+                        -- Team check
+                        local passTeamCheck = true
+                        if opts.teamCheck ~= nil then
+                            if opts.teamCheck then
+                                passTeamCheck = data.ally
+                            else
+                                passTeamCheck = not data.ally
+                            end
+                        end
+                        
+                        if passTeamCheck then
+                            -- Wall check
+                            if not opts.wallCheck or data.visible then
+                                -- Screen check
+                                if not opts.onScreen or data.onScreen then
+                                    -- Frustum check
+                                    if not opts.frustumCulling or data.inFrustum then
+                                        -- Tag checks
+                                        local passTagCheck = true
+                                        
+                                        if #self.tagWhitelist > 0 then
+                                            passTagCheck = false
+                                            for _, tag in ipairs(self.tagWhitelist) do
+                                                if CollectionService:HasTag(data.root.Parent, tag) then
+                                                    passTagCheck = true
+                                                    break
+                                                end
+                                            end
+                                        end
+                                        
+                                        if passTagCheck then
+                                            for _, tag in ipairs(self.tagBlacklist) do
+                                                if CollectionService:HasTag(data.root.Parent, tag) then
+                                                    passTagCheck = false
+                                                    break
+                                                end
+                                            end
+                                        end
+                                        
+                                        if passTagCheck then
+                                            table.insert(self._scratchFiltered, {
+                                                player = plr, 
+                                                data = data
+                                            })
                                         end
                                     end
-                                end
-                                for _,tag in ipairs(self.tagBlacklist) do
-                                    if CollectionService:HasTag(d.root.Parent,tag) then
-                                        pass = false; break
-                                    end
-                                end
-                                if pass then
-                                    self._scratchFiltered[#self._scratchFiltered+1] = {player=plr,data=d}
                                 end
                             end
                         end
@@ -228,23 +364,35 @@ function PlayerEngine:GetFiltered(opts)
             end
         end
     end
+    
     return self._scratchFiltered
 end
 
-function PlayerEngine:GetClosest(opts,chooseFn)
+function PlayerEngine:GetClosest(opts, chooseFn)
     local list = self:GetFiltered(opts)
-    if #list>0 then chooseFn(list); return list[1] end
+    if #list > 0 then 
+        if chooseFn then chooseFn(list) end
+        return list[1] 
+    end
+    return nil
 end
-function PlayerEngine:GetAllies()   return self:GetFiltered({teamCheck=true}) end
-function PlayerEngine:GetEnemies()  return self:GetFiltered({teamCheck=false}) end
-function PlayerEngine:GetByRole(r)  
-    local t={}  
-    for _,e in ipairs(self:GetAll()) do
-        if e.player.Team and e.player.Team.Name==r then
-            table.insert(t,e)
+
+function PlayerEngine:GetAllies()   
+    return self:GetFiltered({teamCheck = true}) 
+end
+
+function PlayerEngine:GetEnemies()  
+    return self:GetFiltered({teamCheck = false}) 
+end
+
+function PlayerEngine:GetByRole(roleName)  
+    local result = {}
+    for _, entry in ipairs(self:GetAll()) do
+        if entry.player.Team and entry.player.Team.Name == roleName then
+            table.insert(result, entry)
         end
     end
-    return t
+    return result
 end
 
 return PlayerEngine
